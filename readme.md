@@ -117,3 +117,57 @@ Per esperimenti ripetibili, fissa il seed di NumPy/TensorFlow nello script main.
 Considera di aggiungere un file utils.py se emergono funzioni di utilità condivise (es. funzioni di visualizzazione).
 
 Versiona il progetto (es. requirements.txt o pyproject.toml) per rendere riproducibile l’ambiente.
+
+
+```python
+def fgsm_attack(model, image, label, epsilon=0.1):
+    
+
+    # 1) Aggiungo la dimensione batch: shape (H,W,C) -> (1,H,W,C)
+    image = tf.convert_to_tensor(image[None], dtype=tf.float32)
+    # Perché: TF calcola gradienti su tensori; la maggior parte dei modelli
+    # si aspetta un batch. Qui lavoriamo su un singolo esempio ma lo
+    # trasformiamo in batch size 1.
+
+    # 2) Preparo la label in formato tensore (shape (1, n_classes) se one-hot)
+    label = tf.convert_to_tensor(label[None], dtype=tf.float32)
+    # Nota: qui si assume che `label` sia one-hot. Se usi etichette sparse
+    # (es. intero), serve usare loss diversa (SparseCategorical...).
+
+    # 3) Attivo il tracciamento dei gradienti rispetto all'immagine
+    with tf.GradientTape() as tape:
+        tape.watch(image)
+        # tape.watch dice a TF di tracciare i gradienti rispetto a `image`.
+        # Senza questo non potrei ottenere grad(loss, image).
+
+        # 4) Forward pass: predizione del modello su batch di dimensione 1
+        prediction = model(image)
+        # `prediction` ha shape (1, n_classes). Può essere logits (no softmax)
+        # o probabilità (softmax) a seconda della definizione del modello.
+
+        # 5) Calcolo la loss fra label e predizione
+        loss = tf.keras.losses.categorical_crossentropy(label, prediction, from_logits=True)
+        # from_logits=True indica che `prediction` sono logits non normalizzati.
+        # Se il tuo modello termina con softmax, usa from_logits=False.
+        # Il risultato `loss` ha shape (1,), loss scalare per l'esempio.
+
+    # 6) Calcolo del gradiente della loss rispetto all'immagine
+    gradient = tape.gradient(loss, image)
+    # `gradient` ha la stessa shape di `image`, cioè (1,H,W,C).
+    # Rappresenta la derivata parziale della loss rispetto a ciascun pixel.
+
+    # 7) Costruisco la perturbazione: segno del gradiente
+    adv_image = image + epsilon * tf.sign(gradient)
+    # tf.sign(gradient) restituisce -1, 0 o +1 per ciascun elemento.
+    # Moltiplicando per epsilon ottieni la perturbazione FGSM element-wise:
+    # se il gradiente è positivo, aggiungi epsilon; se negativo, sottrai epsilon.
+    # Questo è FGSM (single-step, L_infty bounded).
+
+    # 8) Clamp dei valori per restare nell'intervallo valido
+    adv_image = tf.clip_by_value(adv_image, 0, 1)
+    # Se le immagini sono normalizzate in [0,1], qui si evita overflow o valori
+    # fuori range che il modello non si aspetta.
+
+    # 9) Ritorno l'immagine adversariale come array NumPy senza la dimensione batch
+    return adv_image[0].numpy()
+```
